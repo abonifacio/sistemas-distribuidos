@@ -11,20 +11,22 @@
 double dwalltime();
 void mult_x_col(double *dest,double *param1,double *param2);
 void suma(double *dest, double *param1,double *param2,double *param3);
+void suma2(double *dest, double *param1,double *param2);
 void check(double *RES);
 void init_matrices(double *A,double *B, double *L, double *C, double *D,double *U);
 void print_matrix(double *RES);
 void print_matrix_pid(double *RES,int pid);
 void mult_sup(double *dest,double *param1,double *sup);
-void mult_low(double *dest,double *param1,double *low);
+void mult_low(double *dest,double *low,double *param1);
 
-int CANT_FILAS,N,NUM_PROCESOS;
+int CANT_FILAS,N,NUM_PROCESOS,myrank;
 
 
 int main( int argc, char *argv[]){
-	int i,myrank,matrix_size;
+	int i,matrix_size;
 	MPI_Status status;
-	double *A,*B,*A_B,*L,*C,*L_C,*D_U,*U,*D,*RES;
+	double *A,*B,*A_B,*L,*C,*L_C,*D_U,*U,*D,*M,*RES;
+	double *A_SRC,*L_SRC,*D_SRC;
  	double timetick,n_timetick;
 	MPI_Init( &argc, &argv );
 	MPI_Comm_rank( MPI_COMM_WORLD, &myrank );
@@ -36,13 +38,16 @@ int main( int argc, char *argv[]){
 		exit(1);
 	}
 
-	if (myrank == ROOT_PID) {
-  		matrix_size = N*N;
-  	}else{
-  		matrix_size = N*N;
-  	}
+
+
+	// if (myrank == ROOT_PID) {
+ //  		matrix_size = N*N;
+ //  	}else{
+	// 	matrix_size = (N*N)/NUM_PROCESOS;
+ //  	}
 
 	CANT_FILAS = N / NUM_PROCESOS;
+	matrix_size = CANT_FILAS*N;
  	//Aloca memoria para las matrices
 	A = (double*)malloc(sizeof(double)*matrix_size);
 	B = (double*)malloc(sizeof(double)*N*N);
@@ -52,27 +57,31 @@ int main( int argc, char *argv[]){
 	U = (double*)malloc(sizeof(double)*N*N);
 
   	if (myrank == ROOT_PID) {
-		init_matrices(A,B,L,C,D,U);  
+		A_SRC = (double*)malloc(sizeof(double)*N*N);
+		L_SRC = (double*)malloc(sizeof(double)*N*N);
+		D_SRC = (double*)malloc(sizeof(double)*N*N);
+		init_matrices(A_SRC,B,L_SRC,C,D_SRC,U);
   		timetick = dwalltime();
 	}
 	MPI_Bcast(B, N*N, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
 	MPI_Bcast(C, N*N, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
 	MPI_Bcast(U, N*N, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
-	MPI_Scatter(A, (N*N)/NUM_PROCESOS, MPI_DOUBLE, A,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
-	MPI_Scatter(L, (N*N)/NUM_PROCESOS, MPI_DOUBLE, L,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
-	MPI_Scatter(D, (N*N)/NUM_PROCESOS, MPI_DOUBLE, D,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
-	printf("A(%d)\n", myrank);
-	print_matrix_pid(A,myrank);
-	printf("B(%d)\n", myrank);
-	print_matrix_pid(B,myrank);
+	MPI_Scatter(A_SRC, (N*N)/NUM_PROCESOS, MPI_DOUBLE, A,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
+	MPI_Scatter(L_SRC, (N*N)/NUM_PROCESOS, MPI_DOUBLE, L,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
+	MPI_Scatter(D_SRC, (N*N)/NUM_PROCESOS, MPI_DOUBLE, D,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
+
+	if (myrank == ROOT_PID) {
+		free(A_SRC);
+		free(L_SRC);
+		free(D_SRC);
+	}
 	A_B = (double*)malloc(sizeof(double)*matrix_size);
 	mult_x_col(A_B,A,B);
-	// print_matrix(A_B);
 	free(A);
 	free(B);
 	
 	L_C = (double*)malloc(sizeof(double)*matrix_size);
-	mult_low(L_C,C,L);
+	mult_low(L_C,L,C);
 	free(C);
 	free(L);
 	
@@ -81,24 +90,24 @@ int main( int argc, char *argv[]){
 	free(D);
 	free(U);
 	
-	MPI_Gather(A_B, (N*N)/NUM_PROCESOS, MPI_DOUBLE, A_B,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
-	MPI_Gather(L_C, (N*N)/NUM_PROCESOS, MPI_DOUBLE, L_C,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
-	MPI_Gather(D_U, (N*N)/NUM_PROCESOS, MPI_DOUBLE, D_U,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
-	
-	RES = (double*)malloc(sizeof(double)*matrix_size);
-	suma(RES,A_B,L_C,D_U);
+	M = (double*) malloc(sizeof(double)*matrix_size);
+	suma(M,A_B,L_C,D_U);
 	free(A_B);
 	free(L_C);
 	free(D_U);
 
-	MPI_Gather(RES, (N*N)/NUM_PROCESOS, MPI_DOUBLE, RES,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
-
+	if(myrank==ROOT_PID){
+		RES = (double*)malloc(sizeof(double)*N*N);
+	}
+	MPI_Gather(M, (N*N)/NUM_PROCESOS, MPI_DOUBLE,RES,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
+	
 	if (myrank == ROOT_PID) {
   		n_timetick = dwalltime() - timetick;
 	    printf("Tiempo de ejecución: %f\n", n_timetick);
 	    check(RES);
+		free(RES);
 	}
-	free(RES);
+	free(M);
 	MPI_Finalize();
 	return 0;
 }
@@ -139,17 +148,18 @@ void mult_x_col(double *dest,double *param1,double *param2){
 
 void check(double *RES){
 	int i,j;
-	char check = 1;
-	double tmp;
+	char col_check = 1;
+	char row_check = 1;
+	double col_tmp,row_tmp;
+	row_tmp = RES[0];
 	for(i=0;i<N;i++){
-		tmp = RES[i*N];
+		col_tmp = RES[i*N];
+		row_check = row_check&&row_tmp==(col_tmp - i);
 		for(j=0;j<N;j++){
-	  		printf("%f ",RES[i*N+j]);
-			check=check&&(RES[i*N+j]==tmp);
+			col_check=col_check&&(RES[i*N+j]-j)==col_tmp;
 		}
-		printf("\n");
     }
-	if(check){
+	if(col_check && row_check){
 	  printf("Multiplicacion de matrices resultado correcto\n");
 	}else{
 	  printf("Multiplicacion de matrices resultado erroneo\n");
@@ -186,12 +196,13 @@ double dwalltime(){
 }
 
 void mult_sup(double *dest,double *param1,double *sup){
-  int i,j,k;
+  int i,j,k,inicio;
   double sum;
+  inicio = myrank*NUM_PROCESOS;
   for(i=0;i<CANT_FILAS;i++){
      for(j=0;j<N;j++){
       sum=0;
-      for(k=i;k<N;k++){
+      for(k=0;k<=(inicio+j);k++){
         sum +=  param1[i*N+k] * sup[k*N+j];
       }
       dest[i*N+j] =  sum;
@@ -199,16 +210,27 @@ void mult_sup(double *dest,double *param1,double *sup){
   }
 }
 
-void mult_low(double *dest,double *param1,double *low){
-  int i,j,k;
+void mult_low(double *dest,double *low,double *param1){
+  int i,j,k,inicio;
   double sum;
+  inicio = myrank*NUM_PROCESOS;
   for(i=0;i<CANT_FILAS;i++){
      for(j=0;j<N;j++){
       sum=0;
-      for(k=0;k<=i;k++){
-        sum +=  param1[i*N+k] * low[k*N+j];
+      for(k=0;k<=(inicio+i);k++){
+        sum +=  low[i*N+k] * param1[k*N+j];
       }
       dest[i*N+j] =  sum;
+    }
+  }
+}
+
+void suma2(double *dest, double *param1,double *param2){
+  int i,j,index;
+  for(i=0;i<CANT_FILAS;i++){
+     for(j=0;j<N;j++){
+      index = i*N+j; 
+      dest[index] =  param1[index] + param2[index];
     }
   }
 }
