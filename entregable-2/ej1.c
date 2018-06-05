@@ -10,9 +10,9 @@
 // int gettimeofday(struct timeval *tv,struct timezone *tz);
 double dwalltime();
 void mult_x_col(double *dest,double *param1,double *param2);
-void suma(double *dest, double *param1,double *param2,double *param3);
+void suma(double *dest, double *param1,double *param2,double *param3,double escalar);
 void suma2(double *dest, double *param1,double *param2);
-void check(double *RES);
+void check(double *RES,double promedios);
 void init_matrices(double *A,double *B, double *L, double *C, double *D);
 void init_matriz_u(double *U, int N);
 void print_matrix(double *RES);
@@ -21,6 +21,8 @@ int get_index(int row, int col);
 void mult_sup(double *dest,double *param1,double *sup);
 void print_tri_rank(double *RES);
 void mult_low(double *dest,double *low,double *param1);
+double sumar_low(double *dest);
+double sumar_sup(double *dest,int N);
 
 int CANT_FILAS,N,NUM_PROCESOS,myrank;
 
@@ -31,6 +33,7 @@ int main( int argc, char *argv[]){
 	double *A,*B,*A_B,*L,*C,*L_C,*D_U,*U,*D,*M,*RES;
 	double *A_SRC,*L_SRC,*D_SRC;
  	double timetick,n_timetick;
+ 	double *promedios,*promedios_res;
 	MPI_Init( &argc, &argv );
 	MPI_Comm_rank( MPI_COMM_WORLD, &myrank );
 	MPI_Comm_size(MPI_COMM_WORLD,&NUM_PROCESOS);
@@ -59,6 +62,8 @@ int main( int argc, char *argv[]){
 	C = (double*)malloc(sizeof(double)*N*N);
 	D = (double*)malloc(sizeof(double)*matrix_size);
 	U = (double*)malloc(sizeof(double)*upper_matrix_size);
+	promedios = (double*)malloc(sizeof(double)*2);
+	promedios_res = (double*)malloc(sizeof(double)*2);
 
   	if (myrank == ROOT_PID) {
 		A_SRC = (double*)malloc(sizeof(double)*N*N);
@@ -84,6 +89,12 @@ int main( int argc, char *argv[]){
 	mult_x_col(A_B,A,B);
 	free(A);
 	free(B);
+
+	promedios[0] = sumar_low(L) / (N*N);
+	promedios[1] = sumar_sup(U,upper_matrix_size) / (N*N);
+
+	// printf("-------------- Promedio L %f \n", promedios[0]);
+	// printf("-------------- Promedio U %f \n", promedios[1]);
 	
 	L_C = (double*)malloc(sizeof(double)*matrix_size);
 	mult_low(L_C,L,C);
@@ -94,9 +105,12 @@ int main( int argc, char *argv[]){
 	mult_sup(D_U,D,U);
 	free(D);
 	free(U);
-	
+
+	MPI_Allreduce(promedios, promedios_res, 2, MPI_DOUBLE, MPI_SUM,MPI_COMM_WORLD);
+	double p = promedios_res[0]*promedios_res[1];
+	// printf("escalar = %f\n", p);
 	M = (double*) malloc(sizeof(double)*matrix_size);
-	suma(M,A_B,L_C,D_U);
+	suma(M,A_B,L_C,D_U,p);
 	free(A_B);
 	free(L_C);
 	free(D_U);
@@ -109,7 +123,7 @@ int main( int argc, char *argv[]){
 	if (myrank == ROOT_PID) {
   		n_timetick = dwalltime() - timetick;
 	    printf("Tiempo de ejecución: %f\n", n_timetick);
-	    check(RES);
+	    check(RES,p);
 	    // print_matrix(RES);
 		free(RES);
 	}
@@ -165,17 +179,17 @@ void mult_x_col(double *dest,double *param1,double *param2){
   }
 }
 
-void check(double *RES){
+void check(double *RES,double promedio){
 	int i,j;
 	char col_check = 1;
 	char row_check = 1;
 	double col_tmp,row_tmp;
-	row_tmp = RES[0];
+	row_tmp = RES[0]/promedio;
 	for(i=0;i<N;i++){
-		col_tmp = RES[i*N];
+		col_tmp = (RES[i*N]/promedio);
 		row_check = row_check&&row_tmp==(col_tmp - i);
 		for(j=0;j<N;j++){
-			col_check=col_check&&(RES[i*N+j]-j)==col_tmp;
+			col_check=col_check&&(RES[i*N+j]/promedio-j)==col_tmp;
 		}
     }
 	if(col_check && row_check){
@@ -212,6 +226,33 @@ double dwalltime(){
     gettimeofday(&tv,NULL);
     sec = tv.tv_sec + tv.tv_usec/1000000.0;
     return sec;
+}
+
+double sumar_low(double *dest){
+	int i,j,inicio;
+	double sum = 0;
+	inicio = myrank*CANT_FILAS;
+	for(i=0;i<CANT_FILAS;i++){
+	 	for(j=0;j<=(inicio+i);j++){
+			sum += dest[i*N+j];
+		}
+	}
+	return sum;
+}
+
+double sumar_sup(double *dest,int N){
+	int i,j,desde,hasta,CE;
+	CE = N/NUM_PROCESOS;
+	desde = myrank * CE;
+	hasta = (myrank + 1) * CE;
+	if((N-hasta)<CE){
+		hasta = N;
+	}
+	double sum = 0;
+	for(i=desde;i<hasta;i++){
+		sum += dest[i];
+	}
+	return sum;
 }
 
 void mult_sup(double *dest,double *param1,double *sup){
@@ -257,12 +298,12 @@ void suma2(double *dest, double *param1,double *param2){
   }
 }
 
-void suma(double *dest, double *param1,double *param2,double *param3){
+void suma(double *dest, double *param1,double *param2,double *param3,double escalar){
   int i,j,index;
   for(i=0;i<CANT_FILAS;i++){
      for(j=0;j<N;j++){
       index = i*N+j; 
-      dest[index] =  param1[index] + param2[index] + param3[index];
+      dest[index] =  (param1[index] + param2[index] + param3[index]) * escalar;
     }
   }
 }
