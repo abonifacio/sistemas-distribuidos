@@ -13,17 +13,20 @@ void mult_x_col(double *dest,double *param1,double *param2);
 void suma(double *dest, double *param1,double *param2,double *param3);
 void suma2(double *dest, double *param1,double *param2);
 void check(double *RES);
-void init_matrices(double *A,double *B, double *L, double *C, double *D,double *U);
+void init_matrices(double *A,double *B, double *L, double *C, double *D);
+void init_matriz_u(double *U, int N);
 void print_matrix(double *RES);
 void print_matrix_pid(double *RES,int pid);
+int get_index(int row, int col);
 void mult_sup(double *dest,double *param1,double *sup);
+void print_tri_rank(double *RES);
 void mult_low(double *dest,double *low,double *param1);
 
 int CANT_FILAS,N,NUM_PROCESOS,myrank;
 
 
 int main( int argc, char *argv[]){
-	int i,matrix_size;
+	int i,matrix_size,upper_matrix_size;
 	MPI_Status status;
 	double *A,*B,*A_B,*L,*C,*L_C,*D_U,*U,*D,*M,*RES;
 	double *A_SRC,*L_SRC,*D_SRC;
@@ -48,24 +51,26 @@ int main( int argc, char *argv[]){
 
 	CANT_FILAS = N / NUM_PROCESOS;
 	matrix_size = CANT_FILAS*N;
+	upper_matrix_size = N*(N+1)/2;
  	//Aloca memoria para las matrices
 	A = (double*)malloc(sizeof(double)*matrix_size);
 	B = (double*)malloc(sizeof(double)*N*N);
 	L = (double*)malloc(sizeof(double)*matrix_size);
 	C = (double*)malloc(sizeof(double)*N*N);
 	D = (double*)malloc(sizeof(double)*matrix_size);
-	U = (double*)malloc(sizeof(double)*N*N);
+	U = (double*)malloc(sizeof(double)*upper_matrix_size);
 
   	if (myrank == ROOT_PID) {
 		A_SRC = (double*)malloc(sizeof(double)*N*N);
 		L_SRC = (double*)malloc(sizeof(double)*N*N);
 		D_SRC = (double*)malloc(sizeof(double)*N*N);
-		init_matrices(A_SRC,B,L_SRC,C,D_SRC,U);
+		init_matrices(A_SRC,B,L_SRC,C,D_SRC);
+		init_matriz_u(U,upper_matrix_size);
   		timetick = dwalltime();
 	}
 	MPI_Bcast(B, N*N, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
 	MPI_Bcast(C, N*N, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
-	MPI_Bcast(U, N*N, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
+	MPI_Bcast(U, upper_matrix_size, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
 	MPI_Scatter(A_SRC, (N*N)/NUM_PROCESOS, MPI_DOUBLE, A,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
 	MPI_Scatter(L_SRC, (N*N)/NUM_PROCESOS, MPI_DOUBLE, L,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
 	MPI_Scatter(D_SRC, (N*N)/NUM_PROCESOS, MPI_DOUBLE, D,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
@@ -84,7 +89,7 @@ int main( int argc, char *argv[]){
 	mult_low(L_C,L,C);
 	free(C);
 	free(L);
-	
+
 	D_U = (double*)malloc(sizeof(double)*matrix_size);
 	mult_sup(D_U,D,U);
 	free(D);
@@ -105,6 +110,7 @@ int main( int argc, char *argv[]){
   		n_timetick = dwalltime() - timetick;
 	    printf("Tiempo de ejecución: %f\n", n_timetick);
 	    check(RES);
+	    // print_matrix(RES);
 		free(RES);
 	}
 	free(M);
@@ -112,7 +118,7 @@ int main( int argc, char *argv[]){
 	return 0;
 }
 
-void init_matrices(double *A,double *B, double *L, double *C, double *D,double *U){
+void init_matrices(double *A,double *B, double *L, double *C, double *D){
 	int i,j;
 	for(i=0;i<N;i++){
 		for(j=0;j<N;j++){
@@ -121,15 +127,28 @@ void init_matrices(double *A,double *B, double *L, double *C, double *D,double *
 			C[i*N+j] = 1;
 			D[i*N+j] = 1;
 			L[i*N+j]=0;
-		    U[i*N+j]=0;
-		    if(i<=j){
-		      U[i*N+j]=1;
-		    }
 		    if(i>=j){
 		      L[i*N+j]=1;
 		    }
 		}
 	}
+}
+
+void init_matriz_u(double *U, int N){
+	int i,j;
+	for(i=0;i<N;i++){
+	    U[i]=1;
+	}
+}
+
+void print_tri_rank(double *RES){
+	int i,j,inicio = myrank*CANT_FILAS, fin = (myrank + 1)*CANT_FILAS;
+	for(i=inicio;i<fin;i++){
+     for(j=i;j<N;j++){
+	  	printf("(%d) %f ",myrank, RES[get_index(i,j)]);
+     }
+	 printf("\n");
+    } 
 }
 
 void mult_x_col(double *dest,double *param1,double *param2){
@@ -196,24 +215,27 @@ double dwalltime(){
 }
 
 void mult_sup(double *dest,double *param1,double *sup){
-  int i,j,k,inicio;
+  int i,j,k;
   double sum;
-  inicio = myrank*NUM_PROCESOS;
   for(i=0;i<CANT_FILAS;i++){
      for(j=0;j<N;j++){
       sum=0;
-      for(k=0;k<=(inicio+j);k++){
-        sum +=  param1[i*N+k] * sup[k*N+j];
+      for(k=0;k<=j;k++){
+        sum +=  param1[i*N+k] * sup[get_index(k,j)];
       }
       dest[i*N+j] =  sum;
     }
   }
 }
 
+int get_index(int row, int col){
+	return (row*(2*N - row + 1))/2 + col - row;
+}
+
 void mult_low(double *dest,double *low,double *param1){
   int i,j,k,inicio;
   double sum;
-  inicio = myrank*NUM_PROCESOS;
+  inicio = myrank*CANT_FILAS;
   for(i=0;i<CANT_FILAS;i++){
      for(j=0;j<N;j++){
       sum=0;
