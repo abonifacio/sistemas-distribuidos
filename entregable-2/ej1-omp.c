@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/time.h>
+#include <omp.h>
 
 #define ROOT_PID 0
 
@@ -11,7 +12,6 @@
 double dwalltime();
 void mult_x_col(double *dest,double *param1,double *param2);
 void suma(double *dest, double *param1,double *param2,double *param3,double escalar);
-void suma2(double *dest, double *param1,double *param2);
 void check(double *RES,double promedios);
 void init_matrices(double *A,double *B, double *L, double *C, double *D);
 void init_matriz_u(double *U, int N);
@@ -24,7 +24,7 @@ void mult_low(double *dest,double *low,double *param1);
 double sumar_low(double *dest);
 double sumar_sup(double *dest,int N);
 
-int CANT_FILAS,N,NUM_PROCESOS,myrank;
+int CANT_FILAS,N,NUM_PROCESOS,myrank,NUM_THREADS;
 
 
 int main( int argc, char *argv[]){
@@ -39,10 +39,11 @@ int main( int argc, char *argv[]){
 	MPI_Comm_size(MPI_COMM_WORLD,&NUM_PROCESOS);
 
 	//Controla los argumentos al programa
- 	if ((argc != 2) || ((N = atoi(argv[1])) <= 0) ){
-		printf("\nUsar: %s n \n  n: Dimension de la matriz (nxn X nxn)\n ", argv[0]);
-		exit(1);
-	}
+ 	 if ((argc != 3) || ((N = atoi(argv[1])) <= 0) || ((NUM_THREADS = atoi(argv[2])) <= 0) ){
+	    printf("\nUsar: %s n t\n  n: Dimension de la matriz (nxn X nxn) t: Cantidad de threads \n", argv[0]);
+	    exit(1);
+	 }
+	 // omp_set_num_threads(NUM_THREADS);
 
 
 
@@ -124,7 +125,7 @@ int main( int argc, char *argv[]){
   		n_timetick = dwalltime() - timetick;
 	    printf("Tiempo de ejecución: %f\n", n_timetick);
 	    check(RES,p);
-	    // print_matrix(RES);
+	    print_matrix(RES);
 		free(RES);
 	}
 	free(M);
@@ -134,49 +135,55 @@ int main( int argc, char *argv[]){
 
 void init_matrices(double *A,double *B, double *L, double *C, double *D){
 	int i,j;
-	for(i=0;i<N;i++){
-		for(j=0;j<N;j++){
-			A[i*N+j] = 1;
-			B[i*N+j] = 1;
-			C[i*N+j] = 1;
-			D[i*N+j] = 1;
-			L[i*N+j]=0;
-		    if(i>=j){
-		      L[i*N+j]=1;
-		    }
-		}
-	}
+	#pragma omp parallel for collapse(2) private(i,j)
+			for(i=0;i<N;i++){
+				for(j=0;j<N;j++){
+					A[i*N+j] = 1;
+					B[i*N+j] = 1;
+					C[i*N+j] = 1;
+					D[i*N+j] = 1;
+					L[i*N+j]=0;
+				    if(i>=j){
+				      L[i*N+j]=1;
+				    }
+				}
+			}	
+
+	
 }
 
 void init_matriz_u(double *U, int N){
-	int i,j;
-	for(i=0;i<N;i++){
-	    U[i]=1;
-	}
+	#pragma omp parallel for
+		int i,j;
+		for(i=0;i<N;i++){
+		    U[i]=1;
+		}
 }
 
 void print_tri_rank(double *RES){
 	int i,j,inicio = myrank*CANT_FILAS, fin = (myrank + 1)*CANT_FILAS;
-	for(i=inicio;i<fin;i++){
-     for(j=i;j<N;j++){
-	  	printf("(%d) %f ",myrank, RES[get_index(i,j)]);
-     }
-	 printf("\n");
-    } 
+	#pragma omp parallel for collapse(2) private(i,j)
+		for(i=inicio;i<fin;i++){
+    	 for(j=i;j<N;j++){
+		  	printf("(%d) %f ",myrank, RES[get_index(i,j)]);
+    	 }
+		 printf("\n");
+    	}
 }
 
 void mult_x_col(double *dest,double *param1,double *param2){
   int i,j,k;
   double sum;
-  for(i=0;i<CANT_FILAS;i++){
-     for(j=0;j<N;j++){
-      sum=0;
-      for(k=0;k<N;k++){
-        sum +=  param1[i*N+k] * param2[j*N+k];
-      }
-      dest[i*N+j] =  sum;
-    }
-  }
+  #pragma omp parallel for schedule(static) collapse (3) private(i,j,k,sum)
+  	for(i=0;i<CANT_FILAS;i++){
+  	   for(j=0;j<N;j++){
+  	    sum=0;
+  	    for(k=0;k<N;k++){
+  	      sum +=  param1[i*N+k] * param2[j*N+k];
+  	    }
+  	    dest[i*N+j] =  sum;
+  	  }
+  	}
 }
 
 void check(double *RES,double promedio){
@@ -232,11 +239,12 @@ double sumar_low(double *dest){
 	int i,j,inicio;
 	double sum = 0;
 	inicio = myrank*CANT_FILAS;
-	for(i=0;i<CANT_FILAS;i++){
-	 	for(j=0;j<=(inicio+i);j++){
-			sum += dest[i*N+j];
+	#pragma omp parallel for schedule(static) private(i,j) collapse(2)
+		for(i=0;i<CANT_FILAS;i++){
+		 	for(j=0;j<=(inicio+i);j++){
+				sum += dest[i*N+j];
+			}
 		}
-	}
 	return sum;
 }
 
@@ -249,6 +257,7 @@ double sumar_sup(double *dest,int N){
 		hasta = N;
 	}
 	double sum = 0;
+	#pragma omp parallel for schedule(static) private(i,desde,hasta)
 	for(i=desde;i<hasta;i++){
 		sum += dest[i];
 	}
@@ -256,17 +265,17 @@ double sumar_sup(double *dest,int N){
 }
 
 void mult_sup(double *dest,double *param1,double *sup){
-  int i,j,k,inicio;
+  int i,j,k;
   double sum;
-  inicio = myrank*NUM_PROCESOS;
-  for(i=0;i<CANT_FILAS;i++){
-     for(j=0;j<N;j++){
-      sum=0;
-      for(k=0;k<=j;k++){
-        sum +=  param1[i*N+k] * sup[get_index(k,j)];
-      }
-      dest[i*N+j] =  sum;
-    }
+  #pragma omp parallel for schedule(static) private(i,j,k,sum) collapse(2)
+  	for(i=0;i<CANT_FILAS;i++){
+  	   for(j=0;j<N;j++){
+  	    sum=0;
+  	    for(k=0;k<=j;k++){
+  	      sum +=  param1[i*N+k] * sup[get_index(k,j)];
+  	    }
+  	    dest[i*N+j] =  sum;
+  	  }
   }
 }
 
@@ -278,33 +287,25 @@ void mult_low(double *dest,double *low,double *param1){
   int i,j,k,inicio;
   double sum;
   inicio = myrank*CANT_FILAS;
-  for(i=0;i<CANT_FILAS;i++){
-     for(j=0;j<N;j++){
-      sum=0;
-      for(k=0;k<=(inicio+i);k++){
-        sum +=  low[i*N+k] * param1[k*N+j];
-      }
-      dest[i*N+j] =  sum;
-    }
-  }
-}
-
-void suma2(double *dest, double *param1,double *param2){
-  int i,j,index;
-  for(i=0;i<CANT_FILAS;i++){
-     for(j=0;j<N;j++){
-      index = i*N+j; 
-      dest[index] =  param1[index] + param2[index];
-    }
-  }
+  #pragma omp parallel for schedule(static) private(i,j,k,sum) collapse (3)
+  	for(i=0;i<CANT_FILAS;i++){
+  	   for(j=0;j<N;j++){
+  	    sum=0;
+  	    for(k=0;k<=(inicio+i);k++){
+  	      sum +=  low[i*N+k] * param1[k*N+j];
+  	    }
+  	    dest[i*N+j] =  sum;
+  	  }
+  	}
 }
 
 void suma(double *dest, double *param1,double *param2,double *param3,double escalar){
   int i,j,index;
-  for(i=0;i<CANT_FILAS;i++){
-     for(j=0;j<N;j++){
-      index = i*N+j; 
-      dest[index] =  (param1[index] + param2[index] + param3[index]) * escalar;
-    }
-  }
+  #pragma omp parallel for schedule(static) private(i,j,index) collapse (2)
+	  for(i=0;i<CANT_FILAS;i++){
+	     for(j=0;j<N;j++){
+	      index = i*N+j; 
+	      dest[index] =  (param1[index] + param2[index] + param3[index]) * escalar;
+	    }
+	  }
 }
