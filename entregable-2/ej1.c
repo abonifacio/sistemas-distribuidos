@@ -263,7 +263,7 @@ void mult_sup(double *dest,double *param1,double *sup){
      for(j=0;j<N;j++){
       sum=0;
       for(k=0;k<=j;k++){
-        sum +=  param1[i*N+k] * sup[get_index(k,j)];
+        sum +=  param1[i*N+k] * sup[get_index(j,k)];
       }
       dest[i*N+j] =  sum;
     }
@@ -282,7 +282,7 @@ void mult_low(double *dest,double *low,double *param1){
      for(j=0;j<N;j++){
       sum=0;
       for(k=0;k<=(inicio+i);k++){
-        sum +=  low[i*N+k] * param1[k*N+j];
+        sum +=  low[i*N+k] * param1[j*N+k];
       }
       dest[i*N+j] =  sum;
     }
