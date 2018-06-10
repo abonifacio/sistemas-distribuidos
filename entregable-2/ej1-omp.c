@@ -32,7 +32,7 @@ int main( int argc, char *argv[]){
 	MPI_Status status;
 	double *A,*B,*A_B,*L,*C,*L_C,*D_U,*U,*D,*M,*RES;
 	double *A_SRC,*L_SRC,*D_SRC;
- 	double timetick,n_timetick;
+ 	double timetick_total,timetick_comunicacion,tiempo_comunicacion = 0;
  	double *promedios,*promedios_res;
 	MPI_Init( &argc, &argv );
 	MPI_Comm_rank( MPI_COMM_WORLD, &myrank );
@@ -72,8 +72,9 @@ int main( int argc, char *argv[]){
 		D_SRC = (double*)malloc(sizeof(double)*N*N);
 		init_matrices(A_SRC,B,L_SRC,C,D_SRC);
 		init_matriz_u(U,upper_matrix_size);
-  		timetick = dwalltime();
+  		timetick_comunicacion = dwalltime();
 	}
+  	timetick_total = dwalltime();
 	MPI_Bcast(B, N*N, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
 	MPI_Bcast(C, N*N, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
 	MPI_Bcast(U, upper_matrix_size, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
@@ -82,17 +83,13 @@ int main( int argc, char *argv[]){
 	MPI_Scatter(D_SRC, (N*N)/NUM_PROCESOS, MPI_DOUBLE, D,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
 
 	if (myrank == ROOT_PID) {
+		tiempo_comunicacion += dwalltime() - timetick_comunicacion;
 		free(A_SRC);
 		free(L_SRC);
 		free(D_SRC);
 	}
 
 
-	for(i=0;i<NUM_THREADS;i++){
-	    printf("Proceso %d thread %d\n", myrank,i);
-	}
-
-	
 	A_B = (double*)malloc(sizeof(double)*matrix_size);
 	mult_x_col(A_B,A,B);
 	free(A);
@@ -114,7 +111,13 @@ int main( int argc, char *argv[]){
 	free(D);
 	free(U);
 
+	if(myrank == ROOT_PID){
+		timetick_comunicacion = dwalltime();
+	}
 	MPI_Allreduce(promedios, promedios_res, 2, MPI_DOUBLE, MPI_SUM,MPI_COMM_WORLD);
+	if(myrank == ROOT_PID){
+  		tiempo_comunicacion += dwalltime() - timetick_comunicacion;
+	}
 	double p = promedios_res[0]*promedios_res[1];
 	// printf("escalar = %f\n", p);
 	M = (double*) malloc(sizeof(double)*matrix_size);
@@ -125,12 +128,14 @@ int main( int argc, char *argv[]){
 
 	if(myrank==ROOT_PID){
 		RES = (double*)malloc(sizeof(double)*N*N);
+		timetick_comunicacion = dwalltime();
 	}
 	MPI_Gather(M, (N*N)/NUM_PROCESOS, MPI_DOUBLE,RES,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
 	
+	printf("Proceso #%d => Tiempo de ejecución: %f \n", myrank, (dwalltime() - timetick_total));
 	if (myrank == ROOT_PID) {
-  		n_timetick = dwalltime() - timetick;
-	    printf("Tiempo de ejecución: %f\n", n_timetick);
+		tiempo_comunicacion += dwalltime() - timetick_comunicacion;
+		printf("Tiempo de comunicacion: %f \n", tiempo_comunicacion);
 	    check(RES,p);
 	    //print_matrix(RES);
 		free(RES);
@@ -244,7 +249,7 @@ double sumar_low(double *dest){
 	int i,j,inicio;
 	double sum = 0;
 	inicio = myrank*CANT_FILAS;
-	#pragma omp parallel for schedule(static) private(i,j,inicio) collapse(2)
+	#pragma omp parallel for schedule(static) private(i,j)
 		for(i=0;i<CANT_FILAS;i++){
 		 	for(j=0;j<=(inicio+i);j++){
 				sum += dest[i*N+j];
@@ -272,7 +277,7 @@ double sumar_sup(double *dest,int N){
 void mult_sup(double *dest,double *param1,double *sup){
   int i,j,k;
   double sum;
-  #pragma omp parallel for schedule(static) private(i,j,k,sum) collapse(2)
+  #pragma omp parallel for schedule(static) private(i,j,k,sum)
   	for(i=0;i<CANT_FILAS;i++){
   	   for(j=0;j<N;j++){
   	    sum=0;
@@ -292,7 +297,7 @@ void mult_low(double *dest,double *low,double *param1){
   int i,j,k,inicio;
   double sum;
   inicio = myrank*CANT_FILAS;
-  #pragma omp parallel for schedule(static) private(i,j,k,sum) collapse (2)
+  #pragma omp parallel for schedule(static) private(i,j,k,sum)
   	for(i=0;i<CANT_FILAS;i++){
   	   for(j=0;j<N;j++){
   	    sum=0;

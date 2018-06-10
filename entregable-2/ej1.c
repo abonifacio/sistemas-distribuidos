@@ -32,7 +32,7 @@ int main( int argc, char *argv[]){
 	MPI_Status status;
 	double *A,*B,*A_B,*L,*C,*L_C,*D_U,*U,*D,*M,*RES;
 	double *A_SRC,*L_SRC,*D_SRC;
- 	double timetick,n_timetick;
+ 	double timetick_total,timetick_comunicacion,tiempo_comunicacion = 0;
  	double *promedios,*promedios_res;
 	MPI_Init( &argc, &argv );
 	MPI_Comm_rank( MPI_COMM_WORLD, &myrank );
@@ -44,13 +44,6 @@ int main( int argc, char *argv[]){
 		exit(1);
 	}
 
-
-
-	// if (myrank == ROOT_PID) {
- //  		matrix_size = N*N;
- //  	}else{
-	// 	matrix_size = (N*N)/NUM_PROCESOS;
- //  	}
 
 	CANT_FILAS = N / NUM_PROCESOS;
 	matrix_size = CANT_FILAS*N;
@@ -71,8 +64,9 @@ int main( int argc, char *argv[]){
 		D_SRC = (double*)malloc(sizeof(double)*N*N);
 		init_matrices(A_SRC,B,L_SRC,C,D_SRC);
 		init_matriz_u(U,upper_matrix_size);
-  		timetick = dwalltime();
+  		timetick_comunicacion = dwalltime();
 	}
+  	timetick_total = dwalltime();
 	MPI_Bcast(B, N*N, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
 	MPI_Bcast(C, N*N, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
 	MPI_Bcast(U, upper_matrix_size, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
@@ -81,6 +75,7 @@ int main( int argc, char *argv[]){
 	MPI_Scatter(D_SRC, (N*N)/NUM_PROCESOS, MPI_DOUBLE, D,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
 
 	if (myrank == ROOT_PID) {
+  		tiempo_comunicacion += dwalltime() - timetick_comunicacion;
 		free(A_SRC);
 		free(L_SRC);
 		free(D_SRC);
@@ -105,8 +100,13 @@ int main( int argc, char *argv[]){
 	mult_sup(D_U,D,U);
 	free(D);
 	free(U);
-
+	if(myrank == ROOT_PID){
+		timetick_comunicacion = dwalltime();
+	}
 	MPI_Allreduce(promedios, promedios_res, 2, MPI_DOUBLE, MPI_SUM,MPI_COMM_WORLD);
+	if(myrank == ROOT_PID){
+  		tiempo_comunicacion += dwalltime() - timetick_comunicacion;
+	}
 	double p = promedios_res[0]*promedios_res[1];
 	// printf("escalar = %f\n", p);
 	M = (double*) malloc(sizeof(double)*matrix_size);
@@ -117,12 +117,14 @@ int main( int argc, char *argv[]){
 
 	if(myrank==ROOT_PID){
 		RES = (double*)malloc(sizeof(double)*N*N);
+		timetick_comunicacion = dwalltime();
 	}
 	MPI_Gather(M, (N*N)/NUM_PROCESOS, MPI_DOUBLE,RES,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
 	
+	printf("Proceso #%d => Tiempo de ejecución: %f \n", myrank, (dwalltime() - timetick_total));
 	if (myrank == ROOT_PID) {
-  		n_timetick = dwalltime() - timetick;
-	    printf("Tiempo de ejecución: %f\n", n_timetick);
+  		tiempo_comunicacion += dwalltime() - timetick_comunicacion;
+	    printf("Tiempo de comunicacion: %f \n", tiempo_comunicacion);
 	    check(RES,p);
 	    // print_matrix(RES);
 		free(RES);
