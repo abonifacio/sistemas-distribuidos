@@ -32,7 +32,7 @@ int main( int argc, char *argv[]){
 	MPI_Status status;
 	double *A,*B,*A_B,*L,*C,*L_C,*D_U,*U,*D,*M,*RES;
 	double *A_SRC,*L_SRC,*D_SRC;
- 	double timetick_total,timetick_comunicacion,tiempo_comunicacion = 0;
+ 	double timetick_total,timetick_comunicacion,timetick_procesamiento,tiempo_procesamiento = 0,tiempo_comunicacion = 0;
  	double *promedios,*promedios_res;
 	MPI_Init( &argc, &argv );
 	MPI_Comm_rank( MPI_COMM_WORLD, &myrank );
@@ -65,8 +65,8 @@ int main( int argc, char *argv[]){
 		init_matrices(A_SRC,B,L_SRC,C,D_SRC);
 		init_matriz_u(U,upper_matrix_size);
   		timetick_comunicacion = dwalltime();
+  		timetick_total = dwalltime();
 	}
-  	timetick_total = dwalltime();
 	MPI_Bcast(B, N*N, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
 	MPI_Bcast(C, N*N, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
 	MPI_Bcast(U, upper_matrix_size, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
@@ -80,6 +80,7 @@ int main( int argc, char *argv[]){
 		free(L_SRC);
 		free(D_SRC);
 	}
+	timetick_procesamiento = dwalltime();
 	A_B = (double*)malloc(sizeof(double)*matrix_size);
 	mult_x_col(A_B,A,B);
 	free(A);
@@ -103,10 +104,12 @@ int main( int argc, char *argv[]){
 	if(myrank == ROOT_PID){
 		timetick_comunicacion = dwalltime();
 	}
+	tiempo_procesamiento += dwalltime() - timetick_procesamiento;
 	MPI_Allreduce(promedios, promedios_res, 2, MPI_DOUBLE, MPI_SUM,MPI_COMM_WORLD);
 	if(myrank == ROOT_PID){
   		tiempo_comunicacion += dwalltime() - timetick_comunicacion;
 	}
+	timetick_procesamiento = dwalltime();
 	double p = promedios_res[0]*promedios_res[1];
 	// printf("escalar = %f\n", p);
 	M = (double*) malloc(sizeof(double)*matrix_size);
@@ -115,16 +118,18 @@ int main( int argc, char *argv[]){
 	free(L_C);
 	free(D_U);
 
+	tiempo_procesamiento += dwalltime() - timetick_procesamiento;
 	if(myrank==ROOT_PID){
 		RES = (double*)malloc(sizeof(double)*N*N);
 		timetick_comunicacion = dwalltime();
 	}
 	MPI_Gather(M, (N*N)/NUM_PROCESOS, MPI_DOUBLE,RES,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
 	
-	printf("Proceso #%d => Tiempo de ejecución: %f \n", myrank, (dwalltime() - timetick_total));
+	printf("Proceso #%d => Tiempo de procesamiento: %f \n", myrank, tiempo_procesamiento);
 	if (myrank == ROOT_PID) {
   		tiempo_comunicacion += dwalltime() - timetick_comunicacion;
 	    printf("Tiempo de comunicacion: %f \n", tiempo_comunicacion);
+		printf("Tiempo total ROOT: %f \n", (dwalltime() - timetick_total));
 	    check(RES,p);
 	    // print_matrix(RES);
 		free(RES);
