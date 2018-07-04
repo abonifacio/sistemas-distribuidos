@@ -16,13 +16,10 @@ void check(double *RES,double promedios);
 void init_matrices(double *A,double *B, double *L, double *C, double *D);
 void init_matriz_u(double *U, int N);
 void print_matrix(double *RES);
-void print_matrix_pid(double *RES,int pid);
-int get_index(int row, int col);
 void mult_sup(double *dest,double *param1,double *sup);
-void print_tri_rank(double *RES);
 void mult_low(double *dest,double *low,double *param1);
-double sumar_low(double *dest);
-double sumar_sup(double *dest,int N);
+double promedio(double *dest, int N);
+double promedio_low(double *dest);
 
 int CANT_FILAS,N,NUM_PROCESOS,myrank,NUM_THREADS;
 
@@ -39,30 +36,26 @@ int main( int argc, char *argv[]){
 	MPI_Comm_size(MPI_COMM_WORLD,&NUM_PROCESOS);
 
 	//Controla los argumentos al programa
- 	 if ((argc != 3) || ((N = atoi(argv[1])) <= 0) || ((NUM_THREADS = atoi(argv[2])) <= 0) ){
+ 	if ((argc != 3) || ((N = atoi(argv[1])) <= 0) || ((NUM_THREADS = atoi(argv[2])) <= 0) ){
 	    printf("\nUsar: %s n t\n  n: Dimension de la matriz (nxn X nxn) t: Cantidad de threads \n", argv[0]);
 	    exit(1);
 	 }
 	 omp_set_num_threads(NUM_THREADS);
-
-
-
-	// if (myrank == ROOT_PID) {
- //  		matrix_size = N*N;
- //  	}else{
-	// 	matrix_size = (N*N)/NUM_PROCESOS;
- //  	}
 
 	CANT_FILAS = N / NUM_PROCESOS;
 	matrix_size = CANT_FILAS*N;
 	upper_matrix_size = N*(N+1)/2;
  	//Aloca memoria para las matrices
 	A = (double*)malloc(sizeof(double)*matrix_size);
-	B = (double*)malloc(sizeof(double)*N*N);
+	A_B = (double*)malloc(sizeof(double)*matrix_size);
 	L = (double*)malloc(sizeof(double)*matrix_size);
+	B = (double*)malloc(sizeof(double)*N*N);
 	C = (double*)malloc(sizeof(double)*N*N);
 	D = (double*)malloc(sizeof(double)*matrix_size);
 	U = (double*)malloc(sizeof(double)*upper_matrix_size);
+	L_C = (double*)malloc(sizeof(double)*matrix_size);
+	D_U = (double*)malloc(sizeof(double)*matrix_size);
+	M = (double*) malloc(sizeof(double)*matrix_size);
 	promedios = (double*)malloc(sizeof(double)*2);
 	promedios_res = (double*)malloc(sizeof(double)*2);
 
@@ -70,12 +63,12 @@ int main( int argc, char *argv[]){
 		A_SRC = (double*)malloc(sizeof(double)*N*N);
 		L_SRC = (double*)malloc(sizeof(double)*N*N);
 		D_SRC = (double*)malloc(sizeof(double)*N*N);
+		RES = (double*)malloc(sizeof(double)*N*N);
 		init_matrices(A_SRC,B,L_SRC,C,D_SRC);
 		init_matriz_u(U,upper_matrix_size);
   		timetick_comunicacion = dwalltime();
   		timetick_total = dwalltime();
 	}
-  	timetick_total = dwalltime();
 	MPI_Bcast(B, N*N, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
 	MPI_Bcast(C, N*N, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
 	MPI_Bcast(U, upper_matrix_size, MPI_DOUBLE, ROOT_PID, MPI_COMM_WORLD);
@@ -84,33 +77,17 @@ int main( int argc, char *argv[]){
 	MPI_Scatter(D_SRC, (N*N)/NUM_PROCESOS, MPI_DOUBLE, D,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
 
 	if (myrank == ROOT_PID) {
-		tiempo_comunicacion += dwalltime() - timetick_comunicacion;
-		free(A_SRC);
-		free(L_SRC);
-		free(D_SRC);
+  		tiempo_comunicacion += dwalltime() - timetick_comunicacion;
 	}
 	timetick_procesamiento = dwalltime();
-	A_B = (double*)malloc(sizeof(double)*matrix_size);
 	mult_x_col(A_B,A,B);
-	free(A);
-	free(B);
 
-	promedios[0] = sumar_low(L) / (N*N);
-	promedios[1] = sumar_sup(U,upper_matrix_size) / (N*N);
+	promedios[0] = promedio_low(L);
+	promedios[1] = promedio(U,upper_matrix_size);
 
-	// printf("-------------- Promedio L %f \n", promedios[0]);
-	// printf("-------------- Promedio U %f \n", promedios[1]);
-	
-	L_C = (double*)malloc(sizeof(double)*matrix_size);
 	mult_low(L_C,L,C);
-	free(C);
-	free(L);
 
-	D_U = (double*)malloc(sizeof(double)*matrix_size);
 	mult_sup(D_U,D,U);
-	free(D);
-	free(U);
-
 	if(myrank == ROOT_PID){
 		timetick_comunicacion = dwalltime();
 	}
@@ -121,29 +98,35 @@ int main( int argc, char *argv[]){
 	}
 	timetick_procesamiento = dwalltime();
 	double p = promedios_res[0]*promedios_res[1];
-	// printf("escalar = %f\n", p);
-	M = (double*) malloc(sizeof(double)*matrix_size);
 	suma(M,A_B,L_C,D_U,p);
-	free(A_B);
-	free(L_C);
-	free(D_U);
-	
+
 	tiempo_procesamiento += dwalltime() - timetick_procesamiento;
 	if(myrank==ROOT_PID){
-		RES = (double*)malloc(sizeof(double)*N*N);
 		timetick_comunicacion = dwalltime();
 	}
 	MPI_Gather(M, (N*N)/NUM_PROCESOS, MPI_DOUBLE,RES,(N*N)/NUM_PROCESOS, MPI_DOUBLE,ROOT_PID,MPI_COMM_WORLD);
 	
 	printf("Proceso #%d => Tiempo de procesamiento: %f \n", myrank, tiempo_procesamiento);
 	if (myrank == ROOT_PID) {
-		tiempo_comunicacion += dwalltime() - timetick_comunicacion;
+  		tiempo_comunicacion += dwalltime() - timetick_comunicacion;
 	    printf("Tiempo de comunicacion: %f \n", tiempo_comunicacion);
 		printf("Tiempo total ROOT: %f \n", (dwalltime() - timetick_total));
 	    check(RES,p);
-	    //print_matrix(RES);
+	    // print_matrix(RES);
 		free(RES);
+		free(A_SRC);
+		free(L_SRC);
+		free(D_SRC);
 	}
+	free(C);
+	free(L);
+	free(D);
+	free(U);
+	free(A);
+	free(B);
+	free(A_B);
+	free(L_C);
+	free(D_U);
 	free(M);
 	MPI_Finalize();
 	return 0;
@@ -162,9 +145,7 @@ void init_matrices(double *A,double *B, double *L, double *C, double *D){
 		      L[i*N+j]=1;
 		    }
 		}
-	}	
-
-	
+	}
 }
 
 void init_matriz_u(double *U, int N){
@@ -172,32 +153,21 @@ void init_matriz_u(double *U, int N){
 	for(i=0;i<N;i++){
 	    U[i]=1;
 	}
-	
-}
-
-void print_tri_rank(double *RES){
-	int i,j,inicio = myrank*CANT_FILAS, fin = (myrank + 1)*CANT_FILAS;
-	for(i=inicio;i<fin;i++){
-	 for(j=i;j<N;j++){
-	  	printf("(%d) %f ",myrank, RES[get_index(i,j)]);
-	 }
-	 printf("\n");
-	}
 }
 
 void mult_x_col(double *dest,double *param1,double *param2){
   int i,j,k;
   double sum;
-  #pragma omp parallel for schedule(static) private(i,j,k,sum)
-  	for(i=0;i<CANT_FILAS;i++){
-  	   for(j=0;j<N;j++){
-  	    sum=0;
-  	    for(k=0;k<N;k++){
-  	      sum +=  param1[i*N+k] * param2[j*N+k];
-  	    }
-  	    dest[i*N+j] =  sum;
-  	  }
-  	}
+  #pragma omp parallel for private(i,j,k,sum)
+  for(i=0;i<CANT_FILAS;i++){
+     for(j=0;j<N;j++){
+      sum=0;
+      for(k=0;k<N;k++){
+        sum +=  param1[i*N+k] * param2[j*N+k];
+      }
+      dest[i*N+j] =  sum;
+    }
+  }
 }
 
 void check(double *RES,double promedio){
@@ -230,16 +200,6 @@ void print_matrix(double *RES){
     } 
 }
 
-void print_matrix_pid(double *RES,int pid){
-	int i,j;
-	for(i=0;i<N;i++){
-     for(j=0;j<N;j++){
-	  	printf(" %d: [%d,%d] %f",pid,i,j,RES[i*N+j]);
-     }
-	 printf("\n");
-    } 
-}
-
 double dwalltime(){
     double sec;
     struct timeval tv;
@@ -249,77 +209,74 @@ double dwalltime(){
     return sec;
 }
 
-double sumar_low(double *dest){
-	int i,j,inicio;
-	double sum = 0;
-	inicio = myrank*CANT_FILAS;
-	#pragma omp parallel for schedule(static) private(i,j)
-		for(i=0;i<CANT_FILAS;i++){
-		 	for(j=0;j<=(inicio+i);j++){
-				sum += dest[i*N+j];
-			}
-		}
-	return sum;
-}
-
-double sumar_sup(double *dest,int N){
+double promedio(double *dest,int SIZE){
 	int i,j,desde,hasta,CE;
-	CE = N/NUM_PROCESOS;
+	CE = SIZE/NUM_PROCESOS;
 	desde = myrank * CE;
 	hasta = (myrank + 1) * CE;
-	if((N-hasta)<CE){
-		hasta = N;
+	if((SIZE-hasta)<CE){
+		hasta = SIZE;
 	}
 	double sum = 0;
-	#pragma omp parallel for schedule(static) private(i)
+	#pragma omp parallel for private(i)
 	for(i=desde;i<hasta;i++){
 		sum += dest[i];
 	}
-	return sum;
+	return sum / (N*N);
+}
+
+double promedio_low(double *dest){
+	int i,j,inicio;
+	double sum = 0;
+	inicio = myrank*CANT_FILAS;
+	#pragma omp parallel for private(i,j)
+	for(i=0;i<CANT_FILAS;i++){
+	 	for(j=0;j<=(inicio+i);j++){
+			sum += dest[i*N+j];
+		}
+	}
+	return sum / (N*N);
 }
 
 void mult_sup(double *dest,double *param1,double *sup){
-  int i,j,k;
+  int i,j,k,inicio;
   double sum;
-  #pragma omp parallel for schedule(static) private(i,j,k,sum)
-  	for(i=0;i<CANT_FILAS;i++){
-  	   for(j=0;j<N;j++){
-  	    sum=0;
-  	    for(k=0;k<=j;k++){
-  	      sum +=  param1[i*N+k] * sup[get_index(j,k)];
-  	    }
-  	    dest[i*N+j] =  sum;
-  	  }
+  inicio = myrank*NUM_PROCESOS;
+  #pragma omp parallel for private(i,j,k,sum)
+  for(i=0;i<CANT_FILAS;i++){
+     for(j=0;j<N;j++){
+      sum=0;
+      for(k=0;k<=j;k++){
+        sum +=  param1[i*N+k] * sup[(j*(2*N - j + 1))/2 + k - j];
+      }
+      dest[i*N+j] =  sum;
+    }
   }
-}
-
-int get_index(int row, int col){
-	return (row*(2*N - row + 1))/2 + col - row;
 }
 
 void mult_low(double *dest,double *low,double *param1){
   int i,j,k,inicio;
   double sum;
   inicio = myrank*CANT_FILAS;
-  #pragma omp parallel for schedule(static) private(i,j,k,sum)
-  	for(i=0;i<CANT_FILAS;i++){
-  	   for(j=0;j<N;j++){
-  	    sum=0;
-  	    for(k=0;k<=(inicio+i);k++){
-  	      sum +=  low[i*N+k] * param1[j*N+k];
-  	    }
-  	    dest[i*N+j] =  sum;
-  	  }
-  	}
+  #pragma omp parallel for private(i,j,k,sum)
+  for(i=0;i<CANT_FILAS;i++){
+     for(j=0;j<N;j++){
+      sum=0;
+      for(k=0;k<=(inicio+i);k++){
+        sum +=  low[i*N+k] * param1[j*N+k];
+      }
+      dest[i*N+j] =  sum;
+    }
+  }
 }
 
 void suma(double *dest, double *param1,double *param2,double *param3,double escalar){
   int i,j,index;
-  #pragma omp parallel for schedule(static) private(i,j,index) collapse (2)
-	  for(i=0;i<CANT_FILAS;i++){
-	     for(j=0;j<N;j++){
-	      index = i*N+j; 
-	      dest[index] =  (param1[index] + param2[index] + param3[index]) * escalar;
-	    }
-	  }
+  #pragma omp parallel for private(i,j,index) collapse (2)
+  for(i=0;i<CANT_FILAS;i++){
+     for(j=0;j<N;j++){
+      index = i*N+j; 
+      dest[index] =  (param1[index] + param2[index] + param3[index]) * escalar;
+    }
+  }
 }
